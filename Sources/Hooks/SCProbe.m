@@ -166,10 +166,8 @@ static void recordCompletion(id session, NSURLSessionTask *task, NSError *error)
             dumpName = [NSString stringWithFormat:@"%@-%ld.bin", stem, (long)n];
         }
     }
-    BOOL flush = gRequests.length > 512;
-    NSString *requests = flush ? [gRequests copy] : nil;
-    if (flush) [gRequests setString:@""];
     [gLock unlock];
+    NSString *requests = nil;
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         NSString *dir = [SCSupportDirectory() stringByAppendingPathComponent:@"dumps"];
@@ -181,14 +179,7 @@ static void recordCompletion(id session, NSURLSessionTask *task, NSError *error)
             [meta writeToFile:[dir stringByAppendingPathComponent:[dumpName stringByAppendingString:@".txt"]] atomically:YES
                      encoding:NSUTF8StringEncoding error:nil];
         }
-        if (requests) {
-            NSString *path = [SCSupportDirectory() stringByAppendingPathComponent:@"probe-requests.txt"];
-            if (![NSFileManager.defaultManager fileExistsAtPath:path]) [NSFileManager.defaultManager createFileAtPath:path contents:nil attributes:nil];
-            NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
-            [handle seekToEndOfFile];
-            [handle writeData:[requests dataUsingEncoding:NSUTF8StringEncoding]];
-            [handle closeFile];
-        }
+        (void)requests;
     });
 }
 
@@ -221,6 +212,12 @@ static void probeDidComplete(id self, SEL _cmd, NSURLSession *session, NSURLSess
 
 static void hookSessionDelegate(const char *name, int slot) {
     Class cls = objc_getClass(name);
+    if (!cls && !strchr(name, '.')) {
+        // Swift classes are registered under their module-qualified name.
+        char qualified[256];
+        snprintf(qualified, sizeof qualified, "Connectivity_HttpClientKit.%s", name);
+        cls = objc_getClass(qualified);
+    }
     if (!cls) {
         SCLog(@"probe", @"%s is not in this build", name);
         return;
@@ -231,6 +228,31 @@ static void hookSessionDelegate(const char *name, int slot) {
     SCLog(@"probe", @"watching %s (data %@, completion %@)", name, gOrigData[slot] ? @"yes" : @"no", gOrigComplete[slot] ? @"yes" : @"no");
 }
 
+static void appendTo(NSString *name, NSString *text) {
+    if (!text.length) return;
+    NSString *path = [SCSupportDirectory() stringByAppendingPathComponent:name];
+    NSFileManager *files = NSFileManager.defaultManager;
+    if (![files fileExistsAtPath:path]) [files createFileAtPath:path contents:nil attributes:nil];
+    if ([[files attributesOfItemAtPath:path error:nil] fileSize] > 8 * 1024 * 1024) return;
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+    [handle seekToEndOfFile];
+    [handle writeData:[text dataUsingEncoding:NSUTF8StringEncoding]];
+    [handle closeFile];
+}
+
+static void flushRequests(void) {
+    [gLock lock];
+    NSString *requests = [gRequests copy];
+    [gRequests setString:@""];
+    [gLock unlock];
+    appendTo(@"probe-requests.txt", requests);
+}
+
+void SCProbeEsperantoStart(void);
+void SCProbePlayerStart(void);
+
+static dispatch_source_t gRequestsTimer;
+
 void SCProbeStart(void) {
     gLock = [NSLock new];
     gBodies = [NSMutableDictionary dictionary];
@@ -238,6 +260,13 @@ void SCProbeStart(void) {
     gRequests = [NSMutableString string];
     hookSessionDelegate("SPTDataLoaderService", 0);
     hookSessionDelegate("HttpClientURLSession", 1);
+    SCGuard(SCFeatureProbe, @"esperanto probe", ^{ SCProbeEsperantoStart(); });
+    SCGuard(SCFeatureProbe, @"player probe", ^{ SCProbePlayerStart(); });
+    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+    dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), 3 * NSEC_PER_SEC, NSEC_PER_SEC);
+    dispatch_source_set_event_handler(timer, ^{ flushRequests(); });
+    dispatch_resume(timer);
+    gRequestsTimer = timer;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 12 * NSEC_PER_SEC), dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
         SCGuard(SCFeatureProbe, @"class dump", ^{ dumpClasses(); });
         SCGuard(SCFeatureProbe, @"defaults dump", ^{ dumpDefaults(); });
