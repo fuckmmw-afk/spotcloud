@@ -9,11 +9,12 @@ void SCProbeStart(void);
 
 __attribute__((constructor)) static void SCTweakInit(void) {
     @autoreleasepool {
-        NSString *bundle = NSBundle.mainBundle.bundleIdentifier;
         // Extensions (widgets, notifications) load injected dylibs too; SpotCloud is for the app only.
-        if (![bundle isEqualToString:@"com.spotify.client"]) return;
-        SCLog(@"tweak", @"SpotCloud %s loaded in Spotify %@", SPOTCLOUD_VERSION,
-              NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"]);
+        // The bundle ID is not checked: ESign and other signers often change it.
+        NSBundle *main = NSBundle.mainBundle;
+        if (![main.bundlePath.pathExtension isEqualToString:@"app"]) return;
+        SCLog(@"tweak", @"SpotCloud %s loaded in %@ %@ (%@)", SPOTCLOUD_VERSION, main.infoDictionary[@"CFBundleExecutable"],
+              main.infoDictionary[@"CFBundleShortVersionString"], main.bundleIdentifier);
         // Before Spotify starts its audio output, so the AudioOutputUnitStart import is repointed in time.
         SCFeatureStart(SCFeatureJamesDSP, ^{ SCJamesDSPStart(); });
         SCFeatureStart(SCFeatureProbe, ^{ SCProbeStart(); });

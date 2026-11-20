@@ -1,7 +1,7 @@
 TARGET := iphone:clang:16.5:16.0
 ARCHS := arm64
 FINALPACKAGE ?= 1
-SPOTCLOUD_VERSION ?= 0.1.0
+SPOTCLOUD_VERSION ?= 0.1.1
 
 include $(THEOS)/makefiles/common.mk
 
