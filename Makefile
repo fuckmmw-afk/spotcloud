@@ -1,7 +1,7 @@
 TARGET := iphone:clang:16.5:16.0
 ARCHS := arm64
 FINALPACKAGE ?= 1
-SPOTCLOUD_VERSION ?= 0.1.1
+SPOTCLOUD_VERSION ?= 0.1.2
 
 include $(THEOS)/makefiles/common.mk
 
@@ -11,7 +11,9 @@ SpotCloud_CFLAGS := -fobjc-arc -fvisibility=hidden -ISources -ISources/JDSP \
 	-Ivendor/libjamesdsp/subtree/Main/libjamesdsp/jni/jamesdsp/jdsp -Ivendor/libjamesdsp \
 	-DSPOTCLOUD_VERSION='"$(SPOTCLOUD_VERSION)"' -Wno-unused-function
 SpotCloud_FRAMEWORKS := Foundation UIKit AudioToolbox AVFoundation CoreMedia
-SpotCloud_LDFLAGS := -Wl,-install_name,@rpath/SpotCloud.dylib
+# The install name stays the long Substrate path: signers like ESign rewrite it in place, and a short
+# one leaves no room ("Insufficient space to update dylib path").
+SpotCloud_LDFLAGS := -Wl,-headerpad_max_install_names
 SpotCloud_OBJ_FILES := vendor/libjamesdsp/build/ios/libjamesdsp.a
 # No Substrate: hooks are plain Objective-C runtime swaps and an import-slot rebind, which work on a
 # sideloaded (ESign) app without a jailbreak.
