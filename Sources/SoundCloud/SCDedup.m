@@ -141,11 +141,20 @@ NSArray<SCTrack *> *SCDeduplicate(NSArray<SCTrack *> *tracks) {
     }
     NSMutableArray *kept = [NSMutableArray arrayWithCapacity:groups.count];
     for (NSArray<SCTrack *> *group in groups) {
+        // The group's artist: the one its uploads name most often (publisher metadata or "Artist - Title").
+        NSCountedSet *named = [NSCountedSet set];
+        for (SCTrack *t in group) {
+            NSString *key = nickKey(t.explicitArtist);
+            if (key.length) [named addObject:key];
+        }
+        NSString *artist = nil;
+        for (NSString *key in named) {
+            if (!artist || [named countForObject:key] > [named countForObject:artist]) artist = key;
+        }
         SCTrack *byArtist = nil, *mostPlayed = nil;
         for (SCTrack *t in group) {
-            NSString *uploader = nickKey(t.username);
-            BOOL own = uploader.length && [uploader isEqualToString:nickKey(t.displayArtist)];
-            // Prefer the artist's own upload; among several, the most played.
+            BOOL own = artist && [nickKey(t.username) isEqualToString:artist];
+            // The artist's own upload first; among several, the most played.
             if (own && (!byArtist || t.playbackCount > byArtist.playbackCount)) byArtist = t;
             if (!mostPlayed || t.playbackCount > mostPlayed.playbackCount) mostPlayed = t;
         }

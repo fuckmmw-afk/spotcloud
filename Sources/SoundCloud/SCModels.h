@@ -31,6 +31,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) long long playbackCount;
 @property (nonatomic) BOOL streamable;
 @property (nonatomic, copy) NSArray<SCTranscoding *> *transcodings;
+// The artist when the upload names one (publisher metadata or "Artist - Title"); nil otherwise.
+@property (nonatomic, readonly, nullable) NSString *explicitArtist;
 // The artist shown: publisher metadata, else "Artist - Title"'s artist, else the uploader.
 @property (nonatomic, readonly) NSString *displayArtist;
 // The title shown without the "Artist - " prefix the artist was taken from.

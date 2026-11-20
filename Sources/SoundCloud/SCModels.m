@@ -70,14 +70,16 @@ static NSDictionary *dict(id value) { return [value isKindOfClass:NSDictionary.c
     return NSMakeRange(NSNotFound, 0);
 }
 
-- (NSString *)displayArtist {
+- (NSString *)explicitArtist {
     if (self.publisherArtist) return self.publisherArtist;
     NSRange dash = [self artistSeparator];
-    if (dash.location != NSNotFound) {
-        NSString *artist = [[self.title substringToIndex:dash.location] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
-        if (artist.length) return artist;
-    }
-    return self.username.length ? self.username : @"SoundCloud";
+    if (dash.location == NSNotFound) return nil;
+    NSString *artist = [[self.title substringToIndex:dash.location] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+    return artist.length ? artist : nil;
+}
+
+- (NSString *)displayArtist {
+    return self.explicitArtist ?: (self.username.length ? self.username : @"SoundCloud");
 }
 
 - (NSString *)displayTitle {
