@@ -220,6 +220,36 @@ static NSString *firstMatch(NSString *text, NSString *pattern) {
     }];
 }
 
+- (void)fetch:(NSURL *)url offset:(unsigned long long)offset length:(unsigned long long)length
+   completion:(void (^)(NSData *, unsigned long long, BOOL, NSError *))completion {
+    NSString *range = [NSString stringWithFormat:@"bytes=%llu-%llu", offset, offset + length - 1];
+    dispatch_async(_queue, ^{ [self getRange:url range:range attempt:0 completion:completion]; });
+}
+
+// Ranges are not shared between callers (unlike -get:), and retried like it.
+- (void)getRange:(NSURL *)url range:(NSString *)range attempt:(int)attempt
+      completion:(void (^)(NSData *, unsigned long long, BOOL, NSError *))completion {
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    [request setValue:range forHTTPHeaderField:@"Range"];
+    [[_session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *raw, NSError *error) {
+        NSHTTPURLResponse *r = [raw isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)raw : nil;
+        if ((error || r.statusCode >= 500 || r.statusCode == 429) && attempt < 3) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * (1 << attempt) * NSEC_PER_SEC)), self->_queue, ^{
+                [self getRange:url range:range attempt:attempt + 1 completion:completion];
+            });
+            return;
+        }
+        if (error || (r.statusCode != 206 && r.statusCode != 200)) {
+            completion(nil, 0, NO, error ?: scError(r.statusCode, [NSString stringWithFormat:@"HTTP %ld", (long)r.statusCode]));
+            return;
+        }
+        if (r.statusCode == 200) { completion(data, data.length, YES, nil); return; }
+        NSString *contentRange = r.allHeaderFields[@"Content-Range"];
+        unsigned long long total = (unsigned long long)[[contentRange componentsSeparatedByString:@"/"].lastObject longLongValue];
+        completion(data, total ?: data.length, NO, nil);
+    }] resume];
+}
+
 - (void)fetch:(NSURL *)url completion:(void (^)(NSData *, NSError *))completion {
     dispatch_async(_queue, ^{
         [self get:url headers:@{} attempt:0 completion:^(NSData *data, NSHTTPURLResponse *r, NSError *error) { completion(data, error); }];

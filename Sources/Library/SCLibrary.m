@@ -88,6 +88,15 @@ NSString *SCLocalURI(NSString *artist, NSString *album, NSString *title, NSInteg
             _byURI[e.uri] = e;
             if (e.indexedURI) _byURI[e.indexedURI] = e;
         }
+        // Files a stream left unfinished (the app was closed mid-download) are not in the catalog: removed,
+        // so Spotify does not list half a track.
+        NSMutableSet *known = [NSMutableSet set];
+        for (SCEntry *e in _byID.allValues) if (e.file) [known addObject:e.file];
+        for (NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:_tracksDirectory error:nil]) {
+            if ([known containsObject:name] || [name hasPrefix:@"."]) continue;
+            [NSFileManager.defaultManager removeItemAtPath:[_tracksDirectory stringByAppendingPathComponent:name] error:nil];
+            SCLog(@"cache", @"removed unfinished %@", name);
+        }
     }
     return self;
 }

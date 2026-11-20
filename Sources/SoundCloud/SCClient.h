@@ -19,6 +19,10 @@ extern NSString *const SCOAuthTokenKey;    // NSUserDefaults "spotcloud.sc.oauth
                      completion:(void (^)(NSURL *_Nullable url, NSError *_Nullable error))completion;
 // Plain GET of any URL through the same retrying session (playlists, segments, artwork).
 - (void)fetch:(NSURL *)url completion:(void (^)(NSData *_Nullable data, NSError *_Nullable error))completion;
+// GET with a Range header (bytes=offset-(offset+length-1)); `total` is the whole resource's size from
+// Content-Range (or the body's length when the server ignored the range and sent it all, `whole` = YES).
+- (void)fetch:(NSURL *)url offset:(unsigned long long)offset length:(unsigned long long)length
+   completion:(void (^)(NSData *_Nullable data, unsigned long long total, BOOL whole, NSError *_Nullable error))completion;
 // Scrapes soundcloud.com for a client_id, stores it, answers it.
 - (void)refreshClientID:(void (^)(NSString *_Nullable clientID, NSError *_Nullable error))completion;
 @end

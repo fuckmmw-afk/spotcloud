@@ -21,6 +21,15 @@ jobs:
             -o spotcloud-proto-tests
           ./spotcloud-proto-tests
 
+      - name: Live stream test (SoundCloud -> m4a while downloading)
+        run: |
+          clang -fobjc-arc -Wall -Wno-unused-function -framework Foundation -framework AudioToolbox -framework AVFoundation -framework CoreMedia \
+            -DSPOTCLOUD_VERSION='"test"' -ISources -ISources/Core -ISources/Library -ISources/SoundCloud -ISources/Media -ISources/JDSP \
+            Tests/SCStreamLiveTest.m Sources/Media/SCStream.m Sources/Media/SCDownloader.m Sources/Library/SCLibrary.m \
+            Sources/SoundCloud/SCClient.m Sources/SoundCloud/SCModels.m Sources/SoundCloud/SCFilter.m Sources/SoundCloud/SCDedup.m \
+            Sources/Core/SCLog.m Sources/JDSP/SCRebind.m -o spotcloud-stream-test
+          ./spotcloud-stream-test
+
   dylib:
     runs-on: ubuntu-latest
     steps:
@@ -57,7 +66,7 @@ jobs:
       - name: Build SpotCloud.dylib
         env:
           THEOS: ${{ runner.temp }}/theos
-        run: make -j4 FINALPACKAGE=1 SPOTCLOUD_VERSION="0.2.1-${GITHUB_SHA::7}"
+        run: make -j4 FINALPACKAGE=1 SPOTCLOUD_VERSION="0.3.0-${GITHUB_SHA::7}"
 
       - name: Check the dylib
         run: |

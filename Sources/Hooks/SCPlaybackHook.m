@@ -19,6 +19,7 @@
 #import "../Library/SCEsperanto.h"
 #import "../Library/SCLibrary.h"
 #import "../Media/SCDownloader.h"
+#import "../Media/SCStream.h"
 
 void SCToast(NSString *text);
 const char *SCBlockSignature(id block);
@@ -67,24 +68,25 @@ static SCEntry *startTrack(NSString *service, NSString *method, NSData *payload,
 
 #pragma mark - downloading and indexing
 
-// Downloads (when needed) and waits for Spotify's local files to list the file; completion on gQueue.
+// Streams the track into its file (when needed) until it can play, and waits for Spotify's local files to
+// list it; completion on gQueue.
 static void ready(SCEntry *entry, BOOL announce, void (^completion)(BOOL ok)) {
     BOOL had = [SCLibrary.shared pathForEntry:entry] != nil;
-    if (!had && announce) SCToast([NSString stringWithFormat:@"SoundCloud: загружаю «%@»…", entry.title]);
-    [SCDownloader.shared ensureEntry:entry completion:^(NSString *path, NSError *error) {
+    if (!had && announce) SCToast([NSString stringWithFormat:@"SoundCloud: «%@» — запускаю…", entry.title]);
+    [SCLibrary.shared evictKeeping:[NSSet setWithObject:@(entry.trackID)]];
+    [SCStream.shared startEntry:entry playable:^(NSString *path, NSError *error) {
         if (!path) {
             if (announce) SCToast([NSString stringWithFormat:@"SoundCloud: не удалось загрузить (%@)", error.localizedDescription]);
             dispatch_async(gQueue, ^{ completion(NO); });
             return;
         }
-        [SCLibrary.shared evictKeeping:[NSSet setWithObject:@(entry.trackID)]];
         if (had && entry.indexedURI) { dispatch_async(gQueue, ^{ completion(YES); }); return; }
         SCLocalFilesFindURI(entry.title, entry.artist, 25, ^(NSString *uri) {
             if (uri) {
                 if (![uri isEqualToString:entry.uri]) SCLog(@"playback", @"Spotify indexed %@ as %@", entry.uri, uri);
                 [SCLibrary.shared entry:entry indexedAs:uri];
             }
-            dispatch_async(gQueue, ^{ completion(YES); });
+            dispatch_async(gQueue, ^{ completion(uri != nil); });
         });
     }];
 }
@@ -261,7 +263,8 @@ static id single(CallBlock orig, id self, SEL _cmd, id service, id method, id pa
 
     if (!missing) {
         if (start) [SCLibrary.shared touch:start];
-        if (playerTraffic) prefetch(entries, 3);
+        // Only what the user queues is fetched ahead; search results never are.
+        if (playerTraffic && ([method isEqualToString:@"AddToQueue"] || [method isEqualToString:@"PlayAsNextInQueue"])) prefetch(entries, 3);
         return orig(self, _cmd, service, method, rewritten, onResponse);
     }
     __block BOOL cancelled = NO;
@@ -279,32 +282,14 @@ static id single(CallBlock orig, id self, SEL _cmd, id service, id method, id pa
             SCLog(@"playback", @"%@ released (%@)", method, ok ? @"ready" : @"download failed");
             orig(self, _cmd, service, method, now, onResponse);
         });
-        prefetch(entries, 3);
     });
     return lifetime;
 }
 
-// ContextPlayer state updates name the current and next tracks: the next SC ones are prefetched.
-static NSString *gLastStateSignature;
+// Streams are only watched to learn the Cosmos transport.
 static id stream(CallBlock orig, id self, SEL _cmd, id service, id method, id payload, id onResponse) {
     if (orig == gCosmosStream) SCEsperantoSetCosmosTransport(self);
-    const char *signature = SCBlockSignature(onResponse);
-    BOOL wanted = [method isKindOfClass:NSString.class] && [method isEqualToString:@"GetState"] && signature &&
-                  strncmp(signature, "B16@?0@", 7) == 0 && SCFeatureEnabled(SCFeaturePrefetch);
-    if (!wanted) return orig(self, _cmd, service, method, payload, onResponse);
-    BOOL (^original)(id) = onResponse;
-    BOOL (^wrapped)(id) = ^BOOL(id response) {
-        SCGuard(SCFeaturePrefetch, @"state", ^{
-            NSArray<SCEntry *> *entries = entriesIn(response);
-            if (!entries.count) return;
-            NSString *signatureNow = [[entries valueForKey:@"uri"] componentsJoinedByString:@"|"];
-            if ([signatureNow isEqualToString:gLastStateSignature]) return;
-            gLastStateSignature = signatureNow;
-            prefetch(entries, 3);
-        });
-        return original(response);
-    };
-    return orig(self, _cmd, service, method, payload, wrapped);
+    return orig(self, _cmd, service, method, payload, onResponse);
 }
 
 static id cosmosSingle(id self, SEL _cmd, id s, id m, id p, id r) { return single(gCosmosSingle, self, _cmd, s, m, p, r); }
@@ -339,6 +324,7 @@ void SCPlaybackHookStart(void) {
     gQueue = dispatch_queue_create("spotcloud.playback", DISPATCH_QUEUE_SERIAL);
     gPrefetching = [NSMutableSet set];
     gHolding = [NSMutableSet set];
+    SCStreamGuardStart();
     Class cosmos = objc_getClass("SPTEsperantoCosmosTransport"), bridge = objc_getClass("SPTEsperantoTransportBridgeImpl");
     SEL s = @selector(callSingle:method:payload:onResponse:), st = @selector(callStream:method:payload:onResponse:);
     gCosmosSingle = (CallBlock)SCSwizzle(cosmos, s, (IMP)cosmosSingle);
