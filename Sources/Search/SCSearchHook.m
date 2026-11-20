@@ -117,7 +117,7 @@ static NSData *entityFor(SCTrack *track, SCEntry *entry, SCProtoField *template)
     SCProtoAppendBytesField(details, 18, duration);
 
     NSMutableData *entity = [NSMutableData data];
-    SCProtoAppendStringField(entity, 1, entry.uri);
+    SCProtoAppendStringField(entity, 1, entry.indexedURI ?: entry.uri);
     SCProtoAppendStringField(entity, 2, entry.title);
     SCProtoAppendStringField(entity, 3, track.artworkURL ?: @"");
     SCProtoAppendBytesField(entity, 5, details);

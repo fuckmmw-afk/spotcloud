@@ -119,7 +119,8 @@ NSString *SCLocalURI(NSString *artist, NSString *album, NSString *title, NSInteg
         e.trackID = track.trackID;
         e.title = track.markedTitle;
         e.artist = track.displayArtist;
-        e.seconds = (NSInteger)llround(track.duration);
+        // Spotify writes the file's whole seconds into a local URI (113.9 s -> 113).
+        e.seconds = (NSInteger)floor(track.duration);
         e.uri = SCLocalURI(e.artist, SCAlbumName, e.title, e.seconds);
         _byID[@(e.trackID)] = e;
         _byURI[e.uri] = e;

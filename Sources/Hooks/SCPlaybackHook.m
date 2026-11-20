@@ -47,10 +47,16 @@ static NSData *fieldValue(NSData *message, uint32_t number) {
     return nil;
 }
 
-// PlayRequest.prepare_play_request(1).options(2).skip_to(3), or PreparePlayRequest.options(2).skip_to(3).
-static SCEntry *startTrack(NSString *method, NSData *payload, NSArray<SCEntry *> *entries) {
-    NSData *prepare = [method isEqualToString:@"Play"] ? fieldValue(payload, 1) : payload;
-    NSData *skipTo = fieldValue(fieldValue(prepare, 2), 3);
+static NSString *const kPlaylistPlay = @"spotify.playlist_esperanto.proto.PlaylistPlayService";
+static NSString *const kContextPlayer = @"spotify.player.esperanto.proto.ContextPlayer";
+
+// The track a play command starts on: ContextPlayer PlayRequest.prepare_play_request(1).options(2).skip_to(3),
+// PreparePlayRequest.options(2).skip_to(3), or PlaylistPlayRequest.prepare_play_options(5).skip_to(3).
+static SCEntry *startTrack(NSString *service, NSString *method, NSData *payload, NSArray<SCEntry *> *entries) {
+    NSData *options = nil;
+    if ([service isEqualToString:kPlaylistPlay]) options = fieldValue(payload, 5);
+    else options = fieldValue([method isEqualToString:@"Play"] ? fieldValue(payload, 1) : payload, 2);
+    NSData *skipTo = fieldValue(options, 3);
     if (skipTo) {
         NSArray *named = entriesIn(skipTo);
         if (named.count) return named.firstObject;
@@ -94,6 +100,7 @@ static NSData *withIndexedURIs(NSData *payload, NSArray<SCEntry *> *entries) {
 }
 
 static NSMutableSet<NSNumber *> *gPrefetching;
+static NSMutableSet<NSNumber *> *gHolding;
 
 static void prefetch(NSArray<SCEntry *> *entries, NSUInteger count) {
     if (!SCFeatureEnabled(SCFeaturePrefetch)) return;
@@ -111,9 +118,98 @@ static void prefetch(NSArray<SCEntry *> *entries, NSUInteger count) {
     }
 }
 
-#pragma mark - the transport hooks
+#pragma mark - playing one SC track
+
+static NSData *contextField(NSData *payload) { return fieldValue(payload, 2); }
+
+static NSString *contextURI(NSData *payload) {
+    NSData *uri = fieldValue(contextField(payload), 3);
+    return uri ? [[NSString alloc] initWithData:uri encoding:NSUTF8StringEncoding] : nil;
+}
+
+// Search plays a tapped track as a context of its own URI. For spotify:track: the server resolves that
+// context; for spotify:local: nothing does, and the player stays silent. So the track is played through
+// ContextPlayer.Play with the page given (context spotify:local-files, one track, skip_to it).
+static NSData *contextPlayerRequest(NSData *playlistPlay, NSString *uri) {
+    NSMutableData *track = [NSMutableData data], *page = [NSMutableData data], *context = [NSMutableData data];
+    SCProtoAppendStringField(track, 1, uri);
+    SCProtoAppendBytesField(page, 1, track);
+    SCProtoAppendBytesField(context, 1, page);
+    for (SCProtoField *f in SCProtoParse(contextField(playlistPlay) ?: [NSData data]) ?: @[]) {
+        if (f.number == 2) [context appendData:f.raw];  // metadata (reporting.uri = spotify:search, ...)
+    }
+    SCProtoAppendStringField(context, 3, @"spotify:local-files");
+    NSMutableData *skip = [NSMutableData data], *options = [NSMutableData data];
+    SCProtoAppendStringField(skip, 4, uri);
+    for (SCProtoField *f in SCProtoParse(fieldValue(playlistPlay, 5) ?: [NSData data]) ?: @[]) {
+        if (f.number != 3) [options appendData:f.raw];
+    }
+    SCProtoAppendBytesField(options, 3, skip);
+    NSMutableData *prepare = [NSMutableData data], *request = [NSMutableData data];
+    SCProtoAppendBytesField(prepare, 1, context);
+    SCProtoAppendBytesField(prepare, 2, options);
+    NSData *origin = fieldValue(playlistPlay, 6);
+    if (origin) SCProtoAppendBytesField(prepare, 3, origin);
+    SCProtoAppendBytesField(request, 1, prepare);
+    NSData *playOptions = fieldValue(playlistPlay, 3), *logging = fieldValue(playlistPlay, 4);
+    if (playOptions) SCProtoAppendBytesField(request, 2, playOptions);
+    if (logging) SCProtoAppendBytesField(request, 4, logging);
+    return request;
+}
+
+// PlaylistPlayRequest with its context switched to spotify:local-files (how Spotify plays its local files list).
+static NSData *localFilesPlaylistPlay(NSData *payload, NSString *uri) {
+    NSData *context = contextField(payload);
+    NSMutableData *newContext = [NSMutableData data];
+    for (SCProtoField *f in SCProtoParse(context ?: [NSData data]) ?: @[]) if (f.number != 3 && f.number != 1) [newContext appendData:f.raw];
+    SCProtoAppendStringField(newContext, 3, @"spotify:local-files");
+    NSMutableData *out = [NSMutableData data];
+    for (SCProtoField *f in SCProtoParse(payload) ?: @[]) {
+        if (f.number == 2) SCProtoAppendBytesField(out, 2, newContext);
+        else [out appendData:f.raw];
+    }
+    return out;
+}
+
+static void answer(id onResponse, NSData *data) {
+    if (!onResponse) return;
+    dispatch_async(dispatch_get_main_queue(), ^{ ((void (^)(NSData *))onResponse)(data); });
+}
+
+static NSData *playlistPlayOK(void) {
+    NSMutableData *status = [NSMutableData data], *response = [NSMutableData data];
+    SCProtoAppendVarintField(status, 1, 200);
+    SCProtoAppendBytesField(response, 1, status);
+    return response;
+}
 
 typedef id (*CallBlock)(id, SEL, id, id, id, id);
+
+static void playSingle(SCEntry *entry, NSData *payload, CallBlock orig, id transport, SEL cmd, id service, id onResponse) {
+    NSString *uri = entry.indexedURI ?: entry.uri;
+    NSData *request = contextPlayerRequest(withIndexedURIs(payload, @[entry]), uri);
+    SCEsperantoCall(kContextPlayer, @"Play", request, 10, ^(NSData *response) {
+        uint64_t error = 0;
+        for (SCProtoField *f in SCProtoParse(response ?: [NSData data]) ?: @[]) {
+            if (f.number == 1 && f.wireType == 0) {
+                const uint8_t *b = f.raw.bytes;
+                error = f.raw.length > 1 ? b[1] : 0;
+            }
+        }
+        if (response && error == 0) {
+            SCLog(@"playback", @"playing %lld \"%@\" via ContextPlayer", entry.trackID, entry.title);
+            [SCLibrary.shared touch:entry];
+            answer(onResponse, playlistPlayOK());
+            return;
+        }
+        SCLog(@"playback", @"ContextPlayer.Play %@ (error %llu); trying the local files list", response ? @"refused" : @"did not answer", error);
+        NSData *fallback = localFilesPlaylistPlay(withIndexedURIs(payload, @[entry]), uri);
+        dispatch_async(dispatch_get_main_queue(), ^{ orig(transport, cmd, service, @"Play", fallback, onResponse); });
+    });
+}
+
+#pragma mark - the transport hooks
+
 static CallBlock gCosmosSingle, gCosmosStream, gBridgeSingle, gBridgeStream;
 
 static BOOL holdsFor(NSString *method) {
@@ -134,12 +230,38 @@ static id single(CallBlock orig, id self, SEL _cmd, id service, id method, id pa
     SCGuard(SCFeaturePlayback, @"payload", ^{ entries = entriesIn(payload); });
     if (!entries.count) return orig(self, _cmd, service, method, payload, onResponse);
 
-    SCEntry *start = holdsFor(method) ? startTrack(method, payload, entries) : nil;
+    BOOL playerTraffic = [service isKindOfClass:NSString.class] && ([service hasPrefix:@"spotify.player."] || [service isEqualToString:kPlaylistPlay]);
+    SCEntry *start = holdsFor(method) && playerTraffic ? startTrack(service, method, payload, entries) : nil;
     BOOL missing = start && !([SCLibrary.shared pathForEntry:start] && start.indexedURI);
     NSData *rewritten = withIndexedURIs(payload, entries);
+
+    // A search tap: PlaylistPlayService.Play on a context that is the SC track itself.
+    SCEntry *single = [service isEqual:kPlaylistPlay] && [method isEqualToString:@"Play"] ? [SCLibrary.shared entryForURI:contextURI(payload) ?: @""] : nil;
+    if (single) {
+        @synchronized (gHolding) {
+            if ([gHolding containsObject:@(single.trackID)]) {
+                SCLog(@"playback", @"second tap on %lld ignored while it loads", single.trackID);
+                return newLifetime(^{});
+            }
+            [gHolding addObject:@(single.trackID)];
+        }
+        __block BOOL cancelled = NO;
+        id lifetime = newLifetime(^{ cancelled = YES; });
+        if (lifetime) {
+            SCLog(@"playback", @"search tap on %lld \"%@\"%@", single.trackID, single.title, missing ? @", downloading" : @"");
+            ready(single, YES, ^(BOOL ok) {
+                @synchronized (gHolding) { [gHolding removeObject:@(single.trackID)]; }
+                if (cancelled || !ok) return;
+                playSingle(single, payload, orig, self, _cmd, service, onResponse);
+            });
+            return lifetime;
+        }
+        @synchronized (gHolding) { [gHolding removeObject:@(single.trackID)]; }
+    }
+
     if (!missing) {
         if (start) [SCLibrary.shared touch:start];
-        prefetch(entries, 3);
+        if (playerTraffic) prefetch(entries, 3);
         return orig(self, _cmd, service, method, rewritten, onResponse);
     }
     __block BOOL cancelled = NO;
@@ -216,6 +338,7 @@ static id provideModel(id self, SEL _cmd) {
 void SCPlaybackHookStart(void) {
     gQueue = dispatch_queue_create("spotcloud.playback", DISPATCH_QUEUE_SERIAL);
     gPrefetching = [NSMutableSet set];
+    gHolding = [NSMutableSet set];
     Class cosmos = objc_getClass("SPTEsperantoCosmosTransport"), bridge = objc_getClass("SPTEsperantoTransportBridgeImpl");
     SEL s = @selector(callSingle:method:payload:onResponse:), st = @selector(callStream:method:payload:onResponse:);
     gCosmosSingle = (CallBlock)SCSwizzle(cosmos, s, (IMP)cosmosSingle);
