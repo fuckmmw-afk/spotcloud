@@ -26,7 +26,7 @@ int main(void) {
         SCProtoAppendVarintField(play, 3, 7);
 
         NSArray *fields = SCProtoParse(play);
-        CHECK(fields.count == 2 && [fields[0] number] == 1 && [fields[1] number] == 3);
+        CHECK(fields.count == 2 && ((SCProtoField *)fields[0]).number == 1 && ((SCProtoField *)fields[1]).number == 3);
         CHECK(SCProtoParse([@"not a message \xff" dataUsingEncoding:NSISOLatin1StringEncoding]) == nil);
         NSArray *found = SCProtoStringsWithPrefix(play, @"spotify:local:");
         CHECK(found.count == 1 && [found.firstObject isEqualToString:old]);
