@@ -1,0 +1,9 @@
+Package: space.fuckmmw.spotcloud
+Name: SpotCloud
+Version: 0.1.0
+Architecture: iphoneos-arm
+Description: SoundCloud in Spotify's search, played as local files; JamesDSP behind spotifyglass's Audio effects.
+Maintainer: fuckmmw
+Author: fuckmmw
+Section: Tweaks
+Depends: firmware (>= 16.0)

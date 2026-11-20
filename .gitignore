@@ -1,0 +1,6 @@
+.theos/
+packages/
+vendor/libjamesdsp/build/
+*.dylib
+*.ipa
+.DS_Store
