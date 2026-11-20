@@ -88,7 +88,8 @@ static NSString *record(NSString *kind, id service, id method, id payload, id bl
 // A response block that takes one object (signature "v16@?0@8") is wrapped to dump what it is given.
 static id wrapResponse(id block, NSString *stem) {
     const char *signature = SCBlockSignature(block);
-    if (!stem || !signature || strcmp(signature, "v16@?0@8") != 0) return block;
+    // "v16@?0@8" or "v16@?0@\"NSData\"8": one object, nothing returned.
+    if (!stem || !signature || strncmp(signature, "v16@?0@", 7) != 0) return block;
     void (^original)(id) = block;
     __block NSInteger count = 0;
     return ^(id response) {

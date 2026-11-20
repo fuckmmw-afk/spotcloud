@@ -268,7 +268,13 @@ void SCProbeStart(void) {
     dispatch_resume(timer);
     gRequestsTimer = timer;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 12 * NSEC_PER_SEC), dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
-        SCGuard(SCFeatureProbe, @"class dump", ^{ dumpClasses(); });
+        // The class list is large and the same for a Spotify version: once per version and SpotCloud build.
+        NSString *marker = [NSString stringWithFormat:@"spotcloud.probe.classes.%@.%s",
+                            NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"], SPOTCLOUD_VERSION];
+        if (![NSUserDefaults.standardUserDefaults boolForKey:marker]) {
+            SCGuard(SCFeatureProbe, @"class dump", ^{ dumpClasses(); });
+            [NSUserDefaults.standardUserDefaults setBool:YES forKey:marker];
+        }
         SCGuard(SCFeatureProbe, @"defaults dump", ^{ dumpDefaults(); });
         SCGuard(SCFeatureProbe, @"files dump", ^{ dumpFiles(); });
     });

@@ -6,6 +6,9 @@
 
 void SCJamesDSPStart(void);
 void SCProbeStart(void);
+void SCSearchHookStart(void);
+void SCPlaybackHookStart(void);
+void SCUIStart(void);
 
 __attribute__((constructor)) static void SCTweakInit(void) {
     @autoreleasepool {
@@ -18,7 +21,9 @@ __attribute__((constructor)) static void SCTweakInit(void) {
         // Before Spotify starts its audio output, so the AudioOutputUnitStart import is repointed in time.
         SCFeatureStart(SCFeatureJamesDSP, ^{ SCJamesDSPStart(); });
         SCFeatureStart(SCFeatureProbe, ^{ SCProbeStart(); });
-        // Search, playback and prefetch arrive with stage 1-4 builds.
+        SCFeatureStart(SCFeatureSearch, ^{ SCSearchHookStart(); });
+        SCFeatureStart(SCFeaturePlayback, ^{ SCPlaybackHookStart(); });
+        SCGuard(SCFeatureSearch, @"settings", ^{ SCUIStart(); });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             SCFeaturesLaunchSucceeded();
         });
